@@ -1,0 +1,103 @@
+# Deploy Theme to Store for ENG and FR backends when new changes are pushed to respective branches
+name: Deploy Theme to ENG and FR Backends
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - qa
+      - qa-fr
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node: [16.x]
+
+    steps:
+    - name: set NOW
+      run: |
+        echo "::set-env name=NOW::$(date +'%Y-%m-%dT%H:%M:%S')"
+      env:
+        ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'
+
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Update package.json version
+      uses: jossef/action-set-json-field@v2.1
+      with:
+        file: package.json
+        field: name
+        value: 'bigcommerce-cornerstone-${{ env.NOW }}'
+
+    - name: Update config.json version
+      uses: jossef/action-set-json-field@v2.1
+      with:
+        file: config.json
+        field: name
+        value: 'cornerstone-${{ env.NOW }}'
+
+    - name: Use Node.js ${{ matrix.node }}
+      uses: actions/setup-node@v2-beta
+      with:
+        node-version: ${{ matrix.node }}
+
+    - name: npm cache
+      uses: actions/cache@v2
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-node-
+
+    - name: Import Secrets
+      uses: hashicorp/vault-action@v2
+      with:
+        url: ${{ secrets.VAULT_URL }}
+        tlsSkipVerify: true
+        token: ${{ secrets.VAULT_TOKEN }}
+        secrets: |
+          secret/DSO/SonarCloud token | SONAR_CLOUD_TOKEN;
+
+    - name: SonarCloud Scan
+      uses: sonarsource/sonarcloud-github-action@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ env.SONAR_CLOUD_TOKEN }}
+        SONAR_ORGANIZATION: sleep-country
+      with:
+        args: >
+          -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
+          -Dsonar.projectKey=${{ env.SONAR_ORGANIZATION}}_${{ github.event.repository.name }}
+
+    - name: Install Stencil CLI Dependency
+      run: npm install -g @bigcommerce/stencil-cli@7.4.2
+    - name: Install grunt-cli   
+      run: npm install -g grunt-cli --use-old-node-sass-fork  
+    - name: Install npm
+      run: npm install --use-old-node-sass-fork
+
+    - name: Connect to ENG store
+      if: github.ref == 'refs/heads/qa'
+      env:
+        URL: ${{ secrets.STENCIL_STORE_URL_QA }}
+        TOKEN: ${{ secrets.STENCIL_ACCESS_TOKEN_QA }}
+      run: stencil init -u $URL -t $TOKEN -p 3000 -h https://api.bigcommerce.com
+
+    - name: Connect to FR store
+      if: github.ref == 'refs/heads/qa-fr'
+      env:
+        URL: ${{ secrets.STENCIL_STORE_URL_QA_SLEEPCOUNTRY_FR }}
+        TOKEN: ${{ secrets.STENCIL_ACCESS_TOKEN_QA_SLEEPCOUNTRY_FR }}
+      run: stencil init -u $URL -t $TOKEN -p 3000 -h https://api.bigcommerce.com
+
+    - name: Push theme live to ENG
+      if: github.ref == 'refs/heads/qa'
+      run: stencil push -a -d -c 1
+
+    - name: Push theme live to FR
+      if: github.ref == 'refs/heads/qa-fr'
+      run: stencil push -a -d -c 1
